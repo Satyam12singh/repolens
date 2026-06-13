@@ -3,7 +3,22 @@ name = "repolens"
 version = "0.1.0"
 description = "Instant clarity on any codebase. Navigate imports, trace functions, and get AI answers — all in one terminal view."
 readme = "README.md"
-requires-python = ">=3.13"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Satyam Singh", email = "satyam.singh@whyminds.ai" }]
+keywords = ["codebase", "tui", "developer-tools", "ai", "terminal", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
 dependencies = [
     "textual>=0.47.0",
     "openai>=1.30.0",
@@ -11,9 +26,17 @@ dependencies = [
     "requests>=2.31.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Satyam12singh/repolens"
+Repository = "https://github.com/Satyam12singh/repolens"
+Issues = "https://github.com/Satyam12singh/repolens/issues"
+
 [project.scripts]
-repolens = "main:main"
+repolens = "repolens.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["repolens"]
