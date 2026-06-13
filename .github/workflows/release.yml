@@ -9,6 +9,32 @@ jobs:
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - name: Build
+        run: uv build
+      - name: Publish to PyPI
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  build-binaries:
+    name: Build binary — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            name: repolens-macos-arm64
+          - os: macos-13
+            name: repolens-macos-x64
+          - os: ubuntu-latest
+            name: repolens-linux-x64
+          - os: windows-latest
+            name: repolens-windows-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +43,26 @@ jobs:
         with:
           version: "latest"
 
-      - name: Build
-        run: uv build
+      - name: Install dependencies
+        run: uv sync --extra dev
 
-      - name: Publish to PyPI
-        run: uv publish
+      - name: Build binary
+        run: >
+          uv run pyinstaller
+          --onefile
+          --name ${{ matrix.name }}
+          --collect-all textual
+          --collect-all rich
+          --hidden-import repolens
+          --hidden-import repolens.tui
+          --hidden-import repolens.tui.app
+          repolens/cli.py
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ matrix.name }}
+            dist/${{ matrix.name }}.exe
         env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

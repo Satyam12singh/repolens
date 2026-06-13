@@ -4,10 +4,26 @@ Instant clarity on any codebase. Navigate imports, trace functions, and get AI a
 
 ## Install
 
+### Homebrew — macOS & Linux
 ```bash
 brew tap satyam12singh/tap
-brew install repolens
+brew install repolens-cli
 ```
+
+### uv / pipx / pip — any platform with Python
+```bash
+uv tool install repolens-cli
+pipx install repolens-cli
+pip install repolens-cli
+```
+
+### Direct binary — no Python required
+macOS and Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Satyam12singh/repolens/master/scripts/install.sh | sh
+```
+
+Windows — download the latest `.exe` from [GitHub Releases](https://github.com/Satyam12singh/repolens/releases/latest).
 
 ## Usage
 
@@ -32,7 +48,7 @@ Override any default with:
 
 ```bash
 REPOLENS_AI_MODEL=gemini-2.5-pro repolens .
-REPOLENS_AI_BASE_URL=http://localhost:11434/v1 repolens .   # custom endpoint
+REPOLENS_AI_BASE_URL=http://localhost:11434/v1 repolens .
 ```
 
 If no key is set, the file tree and dependency graphs still work — only the AI features (Ask AI, Onboard) are disabled.
