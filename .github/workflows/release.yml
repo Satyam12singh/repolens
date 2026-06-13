@@ -17,7 +17,8 @@ jobs:
       - name: Build
         run: uv build
       - name: Publish to PyPI
-        run: uv publish --skip-existing
+        run: uv publish
+        continue-on-error: true
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
