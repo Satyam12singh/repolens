@@ -22,6 +22,69 @@ jobs:
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
+  update-homebrew:
+    name: Update Homebrew formula
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PyPI info
+        id: pypi
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DATA=$(curl -s https://pypi.org/pypi/repolens-cli/json)
+          SHA256=$(echo "$DATA" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          for f in d['releases']['$VERSION']:
+              if f['filename'].endswith('.tar.gz'):
+                  print(f['digests']['sha256']); break
+          ")
+          URL=$(echo "$DATA" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          for f in d['releases']['$VERSION']:
+              if f['filename'].endswith('.tar.gz'):
+                  print(f['url']); break
+          ")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Push updated formula to homebrew-tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Satyam12singh/homebrew-tap.git
+          cd homebrew-tap
+          cat > Formula/repolens-cli.rb << FORMULA
+          class RepolensCli < Formula
+            desc "Instant clarity on any codebase — navigate imports, trace functions, and get AI answers in one terminal view"
+            homepage "https://github.com/Satyam12singh/repolens"
+            url "${{ steps.pypi.outputs.url }}"
+            sha256 "${{ steps.pypi.outputs.sha256 }}"
+            license "MIT"
+            version "${{ steps.pypi.outputs.version }}"
+
+            depends_on "python@3.12"
+
+            def install
+              python3 = Formula["python@3.12"].opt_bin/"python3.12"
+              system python3, "-m", "venv", libexec
+              system libexec/"bin/pip", "install", "--no-cache-dir", "repolens-cli==#{version}"
+              bin.install_symlink libexec/"bin/repolens"
+            end
+
+            test do
+              assert_match "RepoLens", shell_output("#{bin}/repolens --help 2>&1")
+            end
+          end
+          FORMULA
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/repolens-cli.rb
+          git commit -m "Update repolens-cli to v${{ steps.pypi.outputs.version }}"
+          git push
+
   build-binaries:
     name: Build binary — ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
