@@ -1,4 +1,6 @@
 class Repolens < Formula
+  include Language::Python::Virtualenv
+
   desc "Instant clarity on any codebase — navigate imports, trace functions, and get AI answers in one terminal view"
   homepage "https://github.com/Satyam12singh/repolens"
   url "https://files.pythonhosted.org/packages/7f/36/c9cc50e3fef1c5a045ce158dccf72b17abcca3c16f3c59aebc73d576852b/repolens_cli-0.1.0.tar.gz"
