@@ -17,13 +17,15 @@ jobs:
       - name: Build
         run: uv build
       - name: Publish to PyPI
-        run: uv publish
+        run: uv publish --skip-existing
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
   build-binaries:
     name: Build binary — ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
