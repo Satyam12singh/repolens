@@ -13,7 +13,7 @@ brew install repolens-cli
 
 ### uv / pipx / pip — any platform with Python
 ```bash
-uv tool install repolens-cli
+uv add repolens-cli
 pipx install repolens-cli
 pip install repolens-cli
 ```
