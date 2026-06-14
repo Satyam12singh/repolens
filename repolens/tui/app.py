@@ -50,13 +50,28 @@ Footer {
 #sidebar {
     width: 28;
     min-width: 14;
-    max-width: 60;
+    max-width: 51;
     border-right: solid #1e3a5f;
     background: #0d1b2a;
 }
 
 #sidebar.-focused-pane {
-    border-right: solid #a8d8ea;
+    /* state marker only — visual border is on #file-tree */
+}
+
+#file-tree.-focused-pane {
+    border: solid #a8d8ea;
+    margin-bottom: 1;
+}
+
+#file-tree .tree--cursor {
+    background: #1e3a5f;
+    color: #a8d8ea;
+}
+
+#file-tree:focus .tree--cursor {
+    background: #1e3a5f;
+    color: #a8d8ea;
 }
 
 #sidebar-label {
@@ -493,6 +508,7 @@ class RepoLensApp(App):
     _focus_on_content: bool = False
     _fn_selected: int = 0
     _fn_search: str = ""
+    _min_sidebar_width: int = 14
 
     def __init__(self, analysis: RepoAnalysis) -> None:
         super().__init__()
@@ -528,6 +544,24 @@ class RepoLensApp(App):
         self._populate_file_tree()
         self._update_stats_bar()
         self._render_content()
+        self._min_sidebar_width = self._optimal_sidebar_width()
+        self.sidebar_width = self._min_sidebar_width
+        self.query_one("#sidebar").styles.min_width = self._min_sidebar_width
+        self.query_one("#sidebar").add_class("-focused-pane")
+        self.query_one("#file-tree", Tree).add_class("-focused-pane")
+
+    def _optimal_sidebar_width(self) -> int:
+        max_len = 0
+        for file_node in self._analysis.files:
+            parts = file_node.path.split("/")
+            depth = len(parts)
+            name = parts[-1]
+            in_deg = self._analysis.stats.in_degree.get(file_node.path, 0)
+            label = name + (f" ({in_deg} importers)" if in_deg > 0 else "")
+            # Textual Tree: ~4 chars indent per level + connector + label
+            line_len = depth * 4 + len(label) + 2
+            max_len = max(max_len, line_len)
+        return max(24, min(51, max_len + 6))
 
     # ── File Tree ─────────────────────────────────────────────────────────────
 
@@ -1098,10 +1132,10 @@ class RepoLensApp(App):
         self.query_one("#sidebar").styles.width = width
 
     def action_sidebar_grow(self) -> None:
-        self.sidebar_width = min(self.sidebar_width + 2, 60)
+        self.sidebar_width = min(self.sidebar_width + 2, 51)
 
     def action_sidebar_shrink(self) -> None:
-        self.sidebar_width = max(self.sidebar_width - 2, 14)
+        self.sidebar_width = max(self.sidebar_width - 2, self._min_sidebar_width)
 
     # ── Pane focus switching ──────────────────────────────────────────────────
 
@@ -1112,11 +1146,13 @@ class RepoLensApp(App):
             area.focus()
             area.add_class("-focused-pane")
             self.query_one("#sidebar").remove_class("-focused-pane")
+            self.query_one("#file-tree", Tree).remove_class("-focused-pane")
             if self.current_tab == "funcs":
                 self.query_one("#fn-panel").add_class("-focused-pane")
         else:
             self.query_one("#file-tree", Tree).focus()
             self.query_one("#sidebar").add_class("-focused-pane")
+            self.query_one("#file-tree", Tree).add_class("-focused-pane")
             self.query_one("#content-area", ScrollableContainer).remove_class("-focused-pane")
             self.query_one("#fn-panel").remove_class("-focused-pane")
 
