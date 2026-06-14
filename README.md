@@ -6,6 +6,7 @@ Instant clarity on any codebase. Navigate imports, trace functions, and get AI a
 
 ### Homebrew — macOS & Linux
 ```bash
+brew trust satyam12singh/tap
 brew tap satyam12singh/tap
 brew install repolens-cli
 ```
