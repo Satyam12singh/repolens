@@ -1,6 +1,6 @@
 [project]
 name = "repolens-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Instant clarity on any codebase. Navigate imports, trace functions, and get AI answers — all in one terminal view."
 readme = "README.md"
 license = { text = "MIT" }
