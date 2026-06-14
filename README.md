@@ -60,11 +60,14 @@ If no key is set, the file tree and dependency graphs still work — only the AI
 | `1` | Dependencies tab |
 | `2` | Call graph tab |
 | `3` | Full graph tab |
+| `4` | Functions browser |
+| `g` | Jump to Functions tab (context-aware — shows current file's functions) |
 | `a` | Ask AI a question about the codebase |
-| `o` | Generate onboarding guide |
+| `o` | Open Codebase Guide (cached after first run, `r` to regenerate) |
 | `f` | Toggle focus between file tree and content |
 | `[` / `]` | Resize sidebar |
-| `j` / `k` | Scroll |
+| `↑` / `↓` | Navigate function list (Tab 4) |
+| `j` / `k` | Scroll content / move file tree cursor |
 | `q` | Quit |
 
 ## Supported Languages

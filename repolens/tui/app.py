@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -123,6 +123,46 @@ Footer {
     border: solid #a8d8ea;
 }
 
+#fn-panel {
+    display: none;
+    height: 1fr;
+    border-top: solid #1e3a5f;
+}
+
+#fn-panel.-focused-pane {
+    border: solid #a8d8ea;
+}
+
+#fn-left {
+    width: 32;
+    border-right: solid #1e3a5f;
+    background: #0d1b2a;
+}
+
+#fn-search {
+    height: 3;
+    background: #0d1b2a;
+    color: #e2e8f0;
+    border: solid #1e3a5f;
+    padding: 0 1;
+}
+
+#fn-search:focus {
+    border: solid #a8d8ea;
+}
+
+#fn-list-scroll {
+    width: 1fr;
+    background: #0d1b2a;
+    padding: 0 1;
+}
+
+#fn-code-scroll {
+    width: 1fr;
+    background: #1a1a2e;
+    padding: 0 2;
+}
+
 #stats-bar {
     height: 2;
     background: #0d1b2a;
@@ -183,6 +223,14 @@ AIScreen {
     color: #718096;
     text-style: italic;
     margin-left: 4;
+    margin-bottom: 1;
+}
+
+.msg-cache-note {
+    color: #68d391;
+    text-style: italic;
+    background: #0a1f0a;
+    padding: 0 2;
     margin-bottom: 1;
 }
 
@@ -262,7 +310,10 @@ AIScreen {
 # ── AI Chat Modal ─────────────────────────────────────────────────────────────
 
 class AIScreen(ModalScreen):
-    BINDINGS = [Binding("escape", "dismiss", "Close")]
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("r", "regenerate", "Regenerate", show=False),
+    ]
 
     def __init__(self, analysis: RepoAnalysis, mode: str = "ask") -> None:
         super().__init__()
@@ -270,12 +321,27 @@ class AIScreen(ModalScreen):
         self._mode = mode
         self._history: list[dict] = []
         self._thinking = False
-        self._thinking_widget: Optional[Markdown] = None  # tracked by ref, no ID games
+        self._thinking_widget: Optional[Markdown] = None
+        self._from_cache = False
+
+    def _cache_path(self) -> Path:
+        return Path(self._analysis.root) / ".repolens" / "onboard.md"
+
+    def _load_from_cache(self) -> Optional[str]:
+        p = self._cache_path()
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+        return None
+
+    def _save_to_cache(self, text: str) -> None:
+        p = self._cache_path()
+        p.parent.mkdir(exist_ok=True)
+        p.write_text(text, encoding="utf-8")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="ai-dialog"):
             if self._mode == "onboard":
-                yield Label(" Onboarding Guide", id="ai-header")
+                yield Label(" Codebase Guide  (Esc to close  ·  r — regenerate)", id="ai-header")
             else:
                 yield Label(" Ask AI — multi-turn chat  (Esc to close)", id="ai-header")
 
@@ -291,7 +357,12 @@ class AIScreen(ModalScreen):
 
     def on_mount(self) -> None:
         if self._mode == "onboard":
-            self._run_onboard()
+            cached = self._load_from_cache()
+            if cached:
+                self._from_cache = True
+                self._show_cached(cached)
+            else:
+                self._run_onboard()
         else:
             self.query_one("#ai-input", Input).focus()
 
@@ -320,9 +391,30 @@ class AIScreen(ModalScreen):
 
     # ── Onboarding mode ───────────────────────────────────────────────────────
 
+    def _show_cached(self, text: str) -> None:
+        container = self.query_one("#chat-history", ScrollableContainer)
+        container.mount(Label(
+            " Loaded from cache  ·  press r to regenerate",
+            classes="msg-cache-note",
+        ))
+        container.mount(Label("RepoLens AI", classes="msg-ai-label"))
+        container.mount(Markdown(text, classes="msg-thinking"))
+        container.scroll_home(animate=False)
+
+    def action_regenerate(self) -> None:
+        if self._mode != "onboard" or self._thinking:
+            return
+        p = self._cache_path()
+        if p.exists():
+            p.unlink()
+        self._from_cache = False
+        container = self.query_one("#chat-history", ScrollableContainer)
+        container.remove_children()
+        self._run_onboard()
+
     @work(thread=True)
     def _run_onboard(self) -> None:
-        container = self.app.call_from_thread(self._start_onboard_ui)
+        self.app.call_from_thread(self._start_onboard_ui)
         try:
             result = ai_client.generate_onboarding(self._analysis)
         except Exception as exc:
@@ -332,11 +424,12 @@ class AIScreen(ModalScreen):
     def _start_onboard_ui(self) -> None:
         container = self.query_one("#chat-history", ScrollableContainer)
         container.mount(Label("RepoLens AI", classes="msg-ai-label"))
-        self._thinking_widget = Markdown("_Generating onboarding guide…_", classes="msg-thinking")
+        self._thinking_widget = Markdown("_Generating codebase guide…_", classes="msg-thinking")
         container.mount(self._thinking_widget)
 
     def _finish_onboard_ui(self, text: str) -> None:
         self._replace_thinking(text)
+        self._save_to_cache(text)
 
     # ── Ask / follow-up ───────────────────────────────────────────────────────
 
@@ -383,19 +476,23 @@ class RepoLensApp(App):
         Binding("1", "tab_deps", "Deps"),
         Binding("2", "tab_calls", "Calls"),
         Binding("3", "tab_graph", "Full Graph"),
+        Binding("4", "tab_funcs", "Functions"),
         Binding("a", "ask_ai", "Ask AI"),
-        Binding("o", "onboard", "Onboard"),
+        Binding("o", "onboard", "Codebase Guide"),
         Binding("f", "focus_next_pane", "Focus pane"),
         Binding("]", "sidebar_grow", "Sidebar ▶"),
         Binding("[", "sidebar_shrink", "◀ Sidebar"),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
+        Binding("g", "goto_funcs", "Functions", show=False),
     ]
 
     current_tab: reactive[str] = reactive("deps")
     selected_file: reactive[Optional[str]] = reactive(None)
     sidebar_width: reactive[int] = reactive(28)
     _focus_on_content: bool = False
+    _fn_selected: int = 0
+    _fn_search: str = ""
 
     def __init__(self, analysis: RepoAnalysis) -> None:
         super().__init__()
@@ -412,10 +509,18 @@ class RepoLensApp(App):
                     yield Button("1 Dependencies", classes="tab-btn -active", id="tab-deps-btn")
                     yield Button("2 Call Graph",   classes="tab-btn",         id="tab-calls-btn")
                     yield Button("3 Full Graph",   classes="tab-btn",         id="tab-graph-btn")
+                    yield Button("4 Functions",    classes="tab-btn",         id="tab-funcs-btn")
                 yield ScrollableContainer(
                     Static("", id="content"),
                     id="content-area",
                 )
+                with Horizontal(id="fn-panel"):
+                    with Vertical(id="fn-left"):
+                        yield Input(placeholder="  search functions…", id="fn-search")
+                        with ScrollableContainer(id="fn-list-scroll"):
+                            yield Static("", id="fn-list")
+                    with ScrollableContainer(id="fn-code-scroll"):
+                        yield Static("", id="fn-code")
                 yield Static("", id="stats-bar")
         yield Footer()
 
@@ -507,9 +612,8 @@ class RepoLensApp(App):
 
     def _set_active_tab(self, tab: str) -> None:
         self.current_tab = tab
-        for btn_id in ("tab-deps-btn", "tab-calls-btn", "tab-graph-btn"):
-            btn = self.query_one(f"#{btn_id}", Button)
-            btn.remove_class("-active")
+        for btn_id in ("tab-deps-btn", "tab-calls-btn", "tab-graph-btn", "tab-funcs-btn"):
+            self.query_one(f"#{btn_id}", Button).remove_class("-active")
         self.query_one(f"#tab-{tab}-btn", Button).add_class("-active")
         self._render_content()
 
@@ -525,6 +629,11 @@ class RepoLensApp(App):
     def _tab_graph(self) -> None:
         self._set_active_tab("graph")
 
+    @on(Button.Pressed, "#tab-funcs-btn")
+    def _tab_funcs(self) -> None:
+        self._reset_fn_panel()
+        self._set_active_tab("funcs")
+
     def action_tab_deps(self) -> None:
         self._set_active_tab("deps")
 
@@ -534,17 +643,54 @@ class RepoLensApp(App):
     def action_tab_graph(self) -> None:
         self._set_active_tab("graph")
 
+    def action_tab_funcs(self) -> None:
+        self._reset_fn_panel()
+        self._set_active_tab("funcs")
+
+    def action_goto_funcs(self) -> None:
+        self._reset_fn_panel()
+        self._set_active_tab("funcs")
+
+    def _reset_fn_panel(self) -> None:
+        self._fn_selected = 0
+        self._fn_search = ""
+        try:
+            self.query_one("#fn-search", Input).value = ""
+        except Exception:
+            pass
+
     # ── Tree selection ────────────────────────────────────────────────────────
 
     @on(Tree.NodeHighlighted, "#file-tree")
     def _on_file_highlighted(self, event: Tree.NodeHighlighted) -> None:
         # data is set on file leaves; directory nodes have no data → show overview
         self.selected_file = event.node.data or None
+        self._fn_selected = 0
         self._render_content()
+
+    @on(Input.Changed, "#fn-search")
+    def _on_fn_search_changed(self, event: Input.Changed) -> None:
+        self._fn_search = event.value
+        self._fn_selected = 0
+        self._render_fn_list()
+        self._render_fn_code()
 
     # ── Content rendering ─────────────────────────────────────────────────────
 
     def _render_content(self) -> None:
+        is_funcs = self.current_tab == "funcs"
+        content_area = self.query_one("#content-area")
+        fn_panel = self.query_one("#fn-panel")
+        content_area.display = not is_funcs
+        fn_panel.display = is_funcs
+        if is_funcs and content_area.has_class("-focused-pane"):
+            fn_panel.add_class("-focused-pane")
+        elif not is_funcs:
+            fn_panel.remove_class("-focused-pane")
+        if is_funcs:
+            self._render_fn_list()
+            self._render_fn_code()
+            return
         content = self.query_one("#content", Static)
         if self.selected_file and self.selected_file.endswith(".md"):
             content.update(self._render_doc_file())
@@ -555,6 +701,68 @@ class RepoLensApp(App):
             content.update(self._render_calls())
         elif self.current_tab == "graph":
             content.update(self._render_full_graph())
+
+    def _get_fn_list(self, search: str = "") -> list[tuple[str, FunctionNode]]:
+        fns = sorted(
+            self._analysis.stats.functions.items(),
+            key=lambda x: (x[1].file_path, x[1].line_start),
+        )
+        if self.selected_file:
+            fns = [(k, v) for k, v in fns if v.file_path == self.selected_file]
+        if search:
+            q = search.lower()
+            fns = [(k, v) for k, v in fns if q in v.name.lower()]
+        return fns
+
+    def _render_fn_list(self) -> None:
+        fns = self._get_fn_list(self._fn_search)
+        t = Text()
+
+        if self.selected_file:
+            short = self.selected_file.split("/")[-1]
+            t.append(f" {len(fns)} fn  ·  {short}\n", style="bold #a8d8ea")
+        else:
+            t.append(f" {len(fns)} functions (all files)\n", style="bold #a8d8ea")
+        t.append(" " + "─" * 28 + "\n", style="#1e3a5f")
+
+        for i, (_, fn) in enumerate(fns):
+            name = fn.name if len(fn.name) <= 24 else fn.name[:21] + "…"
+            if i == self._fn_selected:
+                t.append(f"▶ {name}\n", style="bold #a8d8ea on #1e3a5f")
+            else:
+                t.append(f"  {name}\n", style="#e2e8f0")
+
+        if not fns:
+            t.append("  (no matches)\n", style="#4a5568")
+
+        self.query_one("#fn-list", Static).update(t)
+        scroll = self.query_one("#fn-list-scroll", ScrollableContainer)
+        scroll.scroll_to(y=max(0, self._fn_selected - 3), animate=False)
+
+    def _render_fn_code(self) -> None:
+        fns = self._get_fn_list(self._fn_search)
+        if not fns:
+            self.query_one("#fn-code", Static).update(
+                Text("  (no functions match)", style="#4a5568")
+            )
+            return
+        idx = min(self._fn_selected, len(fns) - 1)
+        _, fn = fns[idx]
+        file_node = next((f for f in self._analysis.files if f.path == fn.file_path), None)
+        t = Text()
+        t.append(f"\n  {fn.file_path}", style="bold cyan")
+        t.append(f"  ·  line {fn.line_start}\n\n", style="#4a5568")
+        if fn.docstring:
+            t.append(f'  """{fn.docstring}"""\n\n', style="#718096")
+        if file_node and file_node.content:
+            lines = file_node.content.splitlines()
+            start = max(0, fn.line_start - 1)
+            end = min(len(lines), fn.line_end or fn.line_start)
+            t.append("\n".join(lines[start:end]), style="#e2e8f0")
+        else:
+            t.append("  (source not available)", style="#4a5568")
+        self.query_one("#fn-code", Static).update(t)
+        self.query_one("#fn-code-scroll", ScrollableContainer).scroll_home(animate=False)
 
     def _render_doc_file(self) -> Text:
         t = Text()
@@ -904,12 +1112,35 @@ class RepoLensApp(App):
             area.focus()
             area.add_class("-focused-pane")
             self.query_one("#sidebar").remove_class("-focused-pane")
+            if self.current_tab == "funcs":
+                self.query_one("#fn-panel").add_class("-focused-pane")
         else:
             self.query_one("#file-tree", Tree).focus()
             self.query_one("#sidebar").add_class("-focused-pane")
             self.query_one("#content-area", ScrollableContainer).remove_class("-focused-pane")
+            self.query_one("#fn-panel").remove_class("-focused-pane")
 
     # ── Override j/k to go to correct widget ─────────────────────────────────
+
+    def on_key(self, event: events.Key) -> None:
+        if self.current_tab != "funcs":
+            return
+        focused = self.focused
+        if focused is not None and getattr(focused, "id", None) == "fn-search":
+            return
+        if event.key == "down":
+            fns = self._get_fn_list(self._fn_search)
+            if self._fn_selected < len(fns) - 1:
+                self._fn_selected += 1
+                self._render_fn_list()
+                self._render_fn_code()
+            event.stop()
+        elif event.key == "up":
+            if self._fn_selected > 0:
+                self._fn_selected -= 1
+                self._render_fn_list()
+                self._render_fn_code()
+            event.stop()
 
     def action_cursor_down(self) -> None:
         if self._focus_on_content:

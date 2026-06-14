@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 REPO="Satyam12singh/repolens"
 BIN_DIR="${HOME}/.local/bin"
 

@@ -14,3 +14,6 @@ wheels/
 
 # uv
 .python-version
+
+# RepoLens cache
+.repolens/
