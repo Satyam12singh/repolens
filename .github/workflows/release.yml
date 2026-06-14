@@ -31,6 +31,7 @@ jobs:
         id: pypi
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          sleep 30
           DATA=$(curl -s https://pypi.org/pypi/repolens-cli/json)
           SHA256=$(echo "$DATA" | python3 -c "
           import json,sys
