@@ -66,15 +66,21 @@ def main() -> None:
     print("  Building dependency and call graphs…")
     stats = build_graph(file_analyses)
 
+    print("  Scanning API endpoints and DTOs…")
+    from repolens.api_scanner import scan_all as api_scan_all
+    endpoints, dtos = api_scan_all(files)
+
     analysis = RepoAnalysis(
         root=str(root),
         files=files,
         file_analyses=file_analyses,
         stats=stats,
+        endpoints=endpoints,
+        dtos=dtos,
     )
 
     n_cycles = len(stats.circular_deps)
-    print(f"  Done. {len(stats.functions)} functions  ·  {n_cycles} circular dep(s)")
+    print(f"  Done. {len(stats.functions)} functions  ·  {len(endpoints)} endpoints  ·  {len(dtos)} DTOs  ·  {n_cycles} circular dep(s)")
 
     if args.json:
         _print_json(analysis)

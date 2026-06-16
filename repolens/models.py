@@ -45,8 +45,35 @@ class GraphStats:
 
 
 @dataclass
+class DtoField:
+    name: str
+    type_hint: str
+
+
+@dataclass
+class DtoModel:
+    name: str
+    file_path: str
+    line: int
+    fields: list[DtoField] = field(default_factory=list)
+    kind: str = ""   # pydantic | dataclass | typeddict | interface | type | struct
+
+
+@dataclass
+class ApiEndpoint:
+    method: str      # GET POST PUT DELETE PATCH WS ANY
+    path: str
+    handler: str
+    file_path: str
+    line: int
+    framework: str   # Flask | FastAPI/Flask | Express | NestJS | Gin/Echo/Chi | actix-web | axum
+
+
+@dataclass
 class RepoAnalysis:
-    root: str          # absolute path to scanned directory
+    root: str
     files: list[FileNode] = field(default_factory=list)
     file_analyses: dict[str, FileAnalysis] = field(default_factory=dict)
     stats: GraphStats = field(default_factory=GraphStats)
+    endpoints: list[ApiEndpoint] = field(default_factory=list)
+    dtos: list[DtoModel] = field(default_factory=list)

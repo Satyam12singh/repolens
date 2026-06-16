@@ -24,7 +24,7 @@ from textual.widgets import (
 )
 from textual.widgets.tree import TreeNode
 
-from ..models import FileAnalysis, FunctionNode, GraphStats, RepoAnalysis
+from ..models import ApiEndpoint, DtoModel, FileAnalysis, FunctionNode, GraphStats, RepoAnalysis
 from .. import ai_client, graph as graph_mod
 
 
@@ -173,6 +173,78 @@ Footer {
 }
 
 #fn-code-scroll {
+    width: 1fr;
+    background: #1a1a2e;
+    padding: 0 2;
+}
+
+#api-panel {
+    display: none;
+    height: 1fr;
+    border-top: solid #1e3a5f;
+}
+
+#api-panel.-focused-pane {
+    border: solid #a8d8ea;
+}
+
+#api-left {
+    width: 42;
+    border-right: solid #1e3a5f;
+    background: #0d1b2a;
+}
+
+#api-toggle-bar {
+    height: 3;
+    background: #0d1b2a;
+    padding: 0 1;
+}
+
+.api-toggle {
+    width: 1fr;
+    background: #0d1b2a;
+    border: none;
+    color: #4a5568;
+    height: 3;
+    padding: 1 2 0 2;
+    content-align: center middle;
+}
+
+.api-toggle:hover {
+    background: #1e3a5f;
+    color: #cbd5e0;
+    padding: 1 2 0 2;
+    content-align: center middle;
+}
+
+.api-toggle.-active-toggle {
+    background: #1e3a5f;
+    border: solid #a8d8ea;
+    color: #a8d8ea;
+    text-style: bold;
+    padding: 0 2;
+    content-align: center middle;
+}
+
+#api-search {
+    height: 3;
+    background: #0d1b2a;
+    color: #e2e8f0;
+    border: solid #1e3a5f;
+    padding: 0 1;
+}
+
+#api-search:focus {
+    border: solid #a8d8ea;
+}
+
+#api-list-scroll {
+    width: 1fr;
+    background: #0d1b2a;
+    padding: 0 1;
+}
+
+#api-detail-scroll {
     width: 1fr;
     background: #1a1a2e;
     padding: 0 2;
@@ -492,6 +564,7 @@ class RepoLensApp(App):
         Binding("2", "tab_calls", "Calls"),
         Binding("3", "tab_graph", "Full Graph"),
         Binding("4", "tab_funcs", "Functions"),
+        Binding("5", "tab_api", "API"),
         Binding("a", "ask_ai", "Ask AI"),
         Binding("o", "onboard", "Codebase Guide"),
         Binding("f", "focus_next_pane", "Focus pane"),
@@ -500,6 +573,8 @@ class RepoLensApp(App):
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
         Binding("g", "goto_funcs", "Functions", show=False),
+        Binding("up",   "navigate_up",   "", show=False, priority=True),
+        Binding("down", "navigate_down", "", show=False, priority=True),
     ]
 
     current_tab: reactive[str] = reactive("deps")
@@ -509,6 +584,9 @@ class RepoLensApp(App):
     _fn_selected: int = 0
     _fn_search: str = ""
     _min_sidebar_width: int = 14
+    _api_view: str = "endpoints"   # "endpoints" | "dtos"
+    _api_selected: int = 0
+    _api_search: str = ""
 
     def __init__(self, analysis: RepoAnalysis) -> None:
         super().__init__()
@@ -526,6 +604,7 @@ class RepoLensApp(App):
                     yield Button("2 Call Graph",   classes="tab-btn",         id="tab-calls-btn")
                     yield Button("3 Full Graph",   classes="tab-btn",         id="tab-graph-btn")
                     yield Button("4 Functions",    classes="tab-btn",         id="tab-funcs-btn")
+                    yield Button("5 API",          classes="tab-btn",         id="tab-api-btn")
                 yield ScrollableContainer(
                     Static("", id="content"),
                     id="content-area",
@@ -537,6 +616,16 @@ class RepoLensApp(App):
                             yield Static("", id="fn-list")
                     with ScrollableContainer(id="fn-code-scroll"):
                         yield Static("", id="fn-code")
+                with Horizontal(id="api-panel"):
+                    with Vertical(id="api-left"):
+                        with Horizontal(id="api-toggle-bar"):
+                            yield Button("Endpoints", classes="api-toggle -active-toggle", id="btn-endpoints")
+                            yield Button("DTOs", classes="api-toggle", id="btn-dtos")
+                        yield Input(placeholder="  search…", id="api-search")
+                        with ScrollableContainer(id="api-list-scroll"):
+                            yield Static("", id="api-list")
+                    with ScrollableContainer(id="api-detail-scroll"):
+                        yield Static("", id="api-detail")
                 yield Static("", id="stats-bar")
         yield Footer()
 
@@ -624,20 +713,22 @@ class RepoLensApp(App):
     # ── Stats Bar ─────────────────────────────────────────────────────────────
 
     def _update_stats_bar(self) -> None:
-        stats = self._analysis.stats
+        stats    = self._analysis.stats
         n_files  = len(self._analysis.files)
         n_funcs  = len(stats.functions)
+        n_ep     = len(self._analysis.endpoints)
+        n_dtos   = len(self._analysis.dtos)
         n_cycles = len(stats.circular_deps)
         cycle_str = (
             f"  [red]! {n_cycles} circular dep{'s' if n_cycles != 1 else ''}[/]"
-            if n_cycles else
-            "  [green]no circular deps[/]"
+            if n_cycles else "  [green]no circular deps[/]"
         )
+        ep_str = f"   [bold]{n_ep}[/] endpoints  [bold]{n_dtos}[/] DTOs" if (n_ep or n_dtos) else ""
         text = (
             f"  [bold]{n_files}[/] files"
             f"   [bold]{n_funcs}[/] functions"
+            f"{ep_str}"
             f"{cycle_str}"
-            f"   [bold]{len(stats.entry_points)}[/] entry points"
             f"   [dim][ / ] resize   [f] switch pane[/]"
         )
         self.query_one("#stats-bar", Static).update(text)
@@ -646,10 +737,19 @@ class RepoLensApp(App):
 
     def _set_active_tab(self, tab: str) -> None:
         self.current_tab = tab
-        for btn_id in ("tab-deps-btn", "tab-calls-btn", "tab-graph-btn", "tab-funcs-btn"):
+        for btn_id in ("tab-deps-btn", "tab-calls-btn", "tab-graph-btn", "tab-funcs-btn", "tab-api-btn"):
             self.query_one(f"#{btn_id}", Button).remove_class("-active")
         self.query_one(f"#tab-{tab}-btn", Button).add_class("-active")
         self._render_content()
+        # Tabs 4 & 5 have their own navigation — auto-focus their content pane
+        # so arrow keys go to the list, not the file tree.
+        if tab in ("funcs", "api"):
+            self._focus_on_content = True
+            self.query_one("#sidebar").remove_class("-focused-pane")
+            self.query_one("#file-tree", Tree).remove_class("-focused-pane")
+            self.query_one("#fn-panel").set_class(tab == "funcs", "-focused-pane")
+            self.query_one("#api-panel").set_class(tab == "api", "-focused-pane")
+            self.query_one("#content-area").remove_class("-focused-pane")
 
     @on(Button.Pressed, "#tab-deps-btn")
     def _tab_deps(self) -> None:
@@ -662,6 +762,36 @@ class RepoLensApp(App):
     @on(Button.Pressed, "#tab-graph-btn")
     def _tab_graph(self) -> None:
         self._set_active_tab("graph")
+
+    @on(Button.Pressed, "#tab-api-btn")
+    def _tab_api_btn(self) -> None:
+        self._set_active_tab("api")
+
+    @on(Button.Pressed, "#btn-endpoints")
+    def _api_show_endpoints(self) -> None:
+        self._api_view = "endpoints"
+        self._api_selected = 0
+        self._api_search = ""
+        try:
+            self.query_one("#api-search", Input).value = ""
+        except Exception:
+            pass
+        self._update_api_toggle()
+        self._render_api_list()
+        self._render_api_detail()
+
+    @on(Button.Pressed, "#btn-dtos")
+    def _api_show_dtos(self) -> None:
+        self._api_view = "dtos"
+        self._api_selected = 0
+        self._api_search = ""
+        try:
+            self.query_one("#api-search", Input).value = ""
+        except Exception:
+            pass
+        self._update_api_toggle()
+        self._render_api_list()
+        self._render_api_detail()
 
     @on(Button.Pressed, "#tab-funcs-btn")
     def _tab_funcs(self) -> None:
@@ -680,6 +810,9 @@ class RepoLensApp(App):
     def action_tab_funcs(self) -> None:
         self._reset_fn_panel()
         self._set_active_tab("funcs")
+
+    def action_tab_api(self) -> None:
+        self._set_active_tab("api")
 
     def action_goto_funcs(self) -> None:
         self._reset_fn_panel()
@@ -700,6 +833,7 @@ class RepoLensApp(App):
         # data is set on file leaves; directory nodes have no data → show overview
         self.selected_file = event.node.data or None
         self._fn_selected = 0
+        self._api_selected = 0
         self._render_content()
 
     @on(Input.Changed, "#fn-search")
@@ -709,21 +843,45 @@ class RepoLensApp(App):
         self._render_fn_list()
         self._render_fn_code()
 
+    @on(Input.Submitted, "#fn-search")
+    def _on_fn_search_submitted(self, event: Input.Submitted) -> None:
+        self.query_one("#fn-list-scroll").focus()
+
+    @on(Input.Changed, "#api-search")
+    def _on_api_search_changed(self, event: Input.Changed) -> None:
+        self._api_search = event.value
+        self._api_selected = 0
+        self._render_api_list()
+        self._render_api_detail()
+
+    @on(Input.Submitted, "#api-search")
+    def _on_api_search_submitted(self, event: Input.Submitted) -> None:
+        self.query_one("#api-list-scroll").focus()
+
     # ── Content rendering ─────────────────────────────────────────────────────
 
     def _render_content(self) -> None:
         is_funcs = self.current_tab == "funcs"
+        is_api   = self.current_tab == "api"
         content_area = self.query_one("#content-area")
-        fn_panel = self.query_one("#fn-panel")
-        content_area.display = not is_funcs
-        fn_panel.display = is_funcs
-        if is_funcs and content_area.has_class("-focused-pane"):
-            fn_panel.add_class("-focused-pane")
-        elif not is_funcs:
-            fn_panel.remove_class("-focused-pane")
+        fn_panel  = self.query_one("#fn-panel")
+        api_panel = self.query_one("#api-panel")
+
+        content_area.display = not is_funcs and not is_api
+        fn_panel.display  = is_funcs
+        api_panel.display = is_api
+
+        focused = content_area.has_class("-focused-pane")
+        fn_panel.set_class(is_funcs and focused, "-focused-pane")
+        api_panel.set_class(is_api and focused, "-focused-pane")
+
         if is_funcs:
             self._render_fn_list()
             self._render_fn_code()
+            return
+        if is_api:
+            self._render_api_list()
+            self._render_api_detail()
             return
         content = self.query_one("#content", Static)
         if self.selected_file and self.selected_file.endswith(".md"):
@@ -1147,36 +1305,75 @@ class RepoLensApp(App):
             area.add_class("-focused-pane")
             self.query_one("#sidebar").remove_class("-focused-pane")
             self.query_one("#file-tree", Tree).remove_class("-focused-pane")
-            if self.current_tab == "funcs":
-                self.query_one("#fn-panel").add_class("-focused-pane")
+            self.query_one("#fn-panel").set_class(self.current_tab == "funcs", "-focused-pane")
+            self.query_one("#api-panel").set_class(self.current_tab == "api", "-focused-pane")
         else:
             self.query_one("#file-tree", Tree).focus()
             self.query_one("#sidebar").add_class("-focused-pane")
             self.query_one("#file-tree", Tree).add_class("-focused-pane")
             self.query_one("#content-area", ScrollableContainer).remove_class("-focused-pane")
             self.query_one("#fn-panel").remove_class("-focused-pane")
+            self.query_one("#api-panel").remove_class("-focused-pane")
 
-    # ── Override j/k to go to correct widget ─────────────────────────────────
+    # ── Key handling ──────────────────────────────────────────────────────────
 
     def on_key(self, event: events.Key) -> None:
-        if self.current_tab != "funcs":
+        # Left/right toggle Endpoints↔DTOs in Tab 5 (not when search input is focused)
+        if self.current_tab == "api":
+            focused_id = getattr(self.focused, "id", None)
+            if focused_id != "api-search":
+                if event.key == "right":
+                    self._api_view = "dtos"
+                    self._api_selected = 0
+                    self._update_api_toggle()
+                    self._render_api_list()
+                    self._render_api_detail()
+                    event.stop()
+                elif event.key == "left":
+                    self._api_view = "endpoints"
+                    self._api_selected = 0
+                    self._update_api_toggle()
+                    self._render_api_list()
+                    self._render_api_detail()
+                    event.stop()
+
+    def action_navigate_down(self) -> None:
+        if not self._focus_on_content:
+            self.query_one("#file-tree", Tree).action_cursor_down()
             return
-        focused = self.focused
-        if focused is not None and getattr(focused, "id", None) == "fn-search":
-            return
-        if event.key == "down":
+        focused_id = getattr(self.focused, "id", None)
+        if self.current_tab == "funcs" and focused_id != "fn-search":
             fns = self._get_fn_list(self._fn_search)
             if self._fn_selected < len(fns) - 1:
                 self._fn_selected += 1
                 self._render_fn_list()
                 self._render_fn_code()
-            event.stop()
-        elif event.key == "up":
+        elif self.current_tab == "api" and focused_id != "api-search":
+            items = self._get_api_items(self._api_search)
+            if self._api_selected < len(items) - 1:
+                self._api_selected += 1
+                self._render_api_list()
+                self._render_api_detail()
+        else:
+            self.query_one("#content-area", ScrollableContainer).scroll_down()
+
+    def action_navigate_up(self) -> None:
+        if not self._focus_on_content:
+            self.query_one("#file-tree", Tree).action_cursor_up()
+            return
+        focused_id = getattr(self.focused, "id", None)
+        if self.current_tab == "funcs" and focused_id != "fn-search":
             if self._fn_selected > 0:
                 self._fn_selected -= 1
                 self._render_fn_list()
                 self._render_fn_code()
-            event.stop()
+        elif self.current_tab == "api" and focused_id != "api-search":
+            if self._api_selected > 0:
+                self._api_selected -= 1
+                self._render_api_list()
+                self._render_api_detail()
+        else:
+            self.query_one("#content-area", ScrollableContainer).scroll_up()
 
     def action_cursor_down(self) -> None:
         if self._focus_on_content:
@@ -1213,6 +1410,179 @@ class RepoLensApp(App):
             )
             return
         self.push_screen(AIScreen(self._analysis, mode="onboard"))
+
+    # ── API Tab (Tab 5) ───────────────────────────────────────────────────────
+
+    _METHOD_COLORS: dict[str, str] = {
+        "GET":    "#68d391",
+        "POST":   "#63b3ed",
+        "PUT":    "#f6ad55",
+        "DELETE": "#fc8181",
+        "PATCH":  "#b794f4",
+        "WS":     "#fbd38d",
+        "MSG":    "#fbd38d",
+        "ANY":    "#718096",
+    }
+
+    def _update_api_toggle(self) -> None:
+        self.query_one("#btn-endpoints", Button).set_class(self._api_view == "endpoints", "-active-toggle")
+        self.query_one("#btn-dtos",      Button).set_class(self._api_view == "dtos",      "-active-toggle")
+
+    def _get_api_items(self, search: str = "") -> list:
+        if self._api_view == "endpoints":
+            items: list = list(self._analysis.endpoints)
+            if self.selected_file:
+                items = [e for e in items if e.file_path == self.selected_file]
+            items = sorted(items, key=lambda e: (e.path, e.method))
+            if search:
+                q = search.lower()
+                items = [e for e in items if q in e.path.lower() or q in e.handler.lower() or q in e.method.lower()]
+        else:
+            items = list(self._analysis.dtos)
+            if self.selected_file:
+                items = [d for d in items if d.file_path == self.selected_file]
+            items = sorted(items, key=lambda d: d.name.lower())
+            if search:
+                q = search.lower()
+                items = [d for d in items if q in d.name.lower() or q in d.kind.lower()]
+        return items
+
+    def _render_api_list(self) -> None:
+        items = self._get_api_items(self._api_search)
+        t = Text()
+        label = "endpoints" if self._api_view == "endpoints" else "DTOs"
+
+        if self.selected_file:
+            short = self.selected_file.split("/")[-1]
+            t.append(f" {len(items)} {label}", style="bold #a8d8ea")
+            t.append(f" · {short}\n", style="#4a5568")
+        else:
+            t.append(f" {len(items)} {label}\n", style="bold #a8d8ea")
+        t.append(" " + "─" * 38 + "\n", style="#1e3a5f")
+        t.append("  ← → switch view\n", style="#2d4a6b")
+
+        for i, item in enumerate(items):
+            sel = i == self._api_selected
+            if self._api_view == "endpoints":
+                color = self._METHOD_COLORS.get(item.method, "#718096")
+                method = f"{item.method:<7}"
+                path = item.path if len(item.path) <= 26 else item.path[:23] + "…"
+                if sel:
+                    t.append(f"▶ {method} {path}\n", style=f"bold {color} on #1e3a5f")
+                else:
+                    t.append("  ", style="#e2e8f0")
+                    t.append(method, style=color)
+                    t.append(f" {path}\n", style="#e2e8f0")
+            else:
+                name = item.name if len(item.name) <= 26 else item.name[:23] + "…"
+                badge = f"({len(item.fields)})"
+                if sel:
+                    t.append(f"▶ {name} {badge}\n", style="bold #a8d8ea on #1e3a5f")
+                else:
+                    t.append(f"  {name} ", style="#e2e8f0")
+                    t.append(f"{badge}\n", style="#4a5568")
+
+        if not items:
+            if self.selected_file:
+                label_none = "endpoints" if self._api_view == "endpoints" else "DTOs"
+                t.append(f"\n  No {label_none} in this file.\n", style="#4a5568")
+            else:
+                t.append(f"\n  Select a file to view its {label}.\n", style="#4a5568")
+
+        self.query_one("#api-list", Static).update(t)
+        self.query_one("#api-list-scroll", ScrollableContainer).scroll_to(
+            y=max(0, self._api_selected - 3), animate=False
+        )
+
+    def _render_api_detail(self) -> None:
+        items = self._get_api_items(self._api_search)
+        t = Text()
+
+        if not items:
+            if self.selected_file:
+                label_none = "API endpoints" if self._api_view == "endpoints" else "DTOs"
+                short = self.selected_file.split("/")[-1]
+                t.append(f"\n  No {label_none} found in {short}.\n", style="#4a5568")
+            else:
+                if self._api_view == "endpoints":
+                    t.append("\n  Select a file to view its API endpoints.\n\n", style="#4a5568")
+                    t.append("  RepoLens detects routes from:\n", style="#718096")
+                    for line in [
+                        "  Python  — FastAPI @app.get(), Flask @app.route()",
+                        "  Node.js — Express router.get(), NestJS @Get()",
+                        "  Go      — Gin r.GET(), Echo e.GET(), Chi r.Get()",
+                        "  Rust    — actix-web #[get()], axum .route()",
+                    ]:
+                        t.append(f"{line}\n", style="#4a5568")
+                else:
+                    t.append("\n  Select a file to view its DTOs.\n\n", style="#4a5568")
+                    t.append("  RepoLens detects DTOs from:\n", style="#718096")
+                    for line in [
+                        "  Python  — Pydantic BaseModel, @dataclass, TypedDict",
+                        "  Node.js — TypeScript interface, type aliases",
+                        "  Go      — structs with json:\"\" tags",
+                        "  Rust    — #[derive(Serialize, Deserialize)] structs",
+                    ]:
+                        t.append(f"{line}\n", style="#4a5568")
+            self.query_one("#api-detail", Static).update(t)
+            return
+
+        idx = min(self._api_selected, len(items) - 1)
+        item = items[idx]
+
+        if self._api_view == "endpoints":
+            color = self._METHOD_COLORS.get(item.method, "#718096")
+            t.append(f"\n  ", style="#e2e8f0")
+            t.append(f"{item.method}", style=f"bold {color}")
+            t.append(f"  {item.path}\n", style="bold #e2e8f0")
+            t.append(f"  handler:   ", style="#4a5568")
+            t.append(f"{item.handler}\n", style="bold #a8d8ea")
+            t.append(f"  framework: ", style="#4a5568")
+            t.append(f"{item.framework}\n", style="#90cdf4")
+            t.append(f"  file:      ", style="#4a5568")
+            t.append(f"{item.file_path}", style="#90cdf4")
+            t.append(f"  ·  line {item.line}\n", style="#4a5568")
+
+            file_node = next((f for f in self._analysis.files if f.path == item.file_path), None)
+            if file_node and file_node.content:
+                t.append(f"\n  {'─' * 58}\n", style="#2d3748")
+                t.append("  HANDLER SOURCE\n\n", style="bold #a8d8ea")
+                lines = file_node.content.splitlines()
+                start = max(0, item.line - 1)
+                for line in lines[start : start + 25]:
+                    t.append(f"  {line}\n", style="#e2e8f0")
+        else:
+            kind_label = {
+                "pydantic":   "Pydantic BaseModel",
+                "dataclass":  "Python Dataclass",
+                "typeddict":  "TypedDict",
+                "interface":  "TypeScript Interface",
+                "type":       "TypeScript Type",
+                "struct":     "Go / Rust Struct",
+            }.get(item.kind, item.kind.title())
+
+            t.append(f"\n  {item.name}\n", style="bold #e2e8f0")
+            t.append(f"  {kind_label}", style="#90cdf4")
+            t.append(f"  ·  line {item.line}\n", style="#4a5568")
+            t.append(f"  {item.file_path}\n", style="#4a5568")
+            t.append(f"\n  {'─' * 58}\n", style="#2d3748")
+            t.append(f"  FIELDS  ({len(item.fields)})\n\n", style="bold #a8d8ea")
+
+            if item.fields:
+                for fi, f in enumerate(item.fields):
+                    conn = "└── " if fi == len(item.fields) - 1 else "├── "
+                    t.append(f"  {conn}", style="#4a5568")
+                    t.append(f"{f.name}", style="#e2e8f0")
+                    if f.type_hint:
+                        t.append(": ", style="#4a5568")
+                        t.append(f"{f.type_hint}\n", style="#90cdf4")
+                    else:
+                        t.append("\n")
+            else:
+                t.append("  └── (no typed fields detected)\n", style="#4a5568")
+
+        self.query_one("#api-detail", Static).update(t)
+        self.query_one("#api-detail-scroll", ScrollableContainer).scroll_home(animate=False)
 
     def action_refresh_view(self) -> None:
         self._render_content()

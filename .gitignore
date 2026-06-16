@@ -17,3 +17,6 @@ wheels/
 
 # RepoLens cache
 .repolens/
+
+# Test files (local testing only)
+test_files/
