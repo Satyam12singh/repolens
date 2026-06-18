@@ -24,7 +24,7 @@ from textual.widgets import (
 )
 from textual.widgets.tree import TreeNode
 
-from ..models import ApiEndpoint, DtoModel, FileAnalysis, FunctionNode, GraphStats, RepoAnalysis
+from ..models import ApiEndpoint, DeadItem, DtoModel, EnvVar, FileAnalysis, FunctionNode, GraphStats, RepoAnalysis
 from .. import ai_client, graph as graph_mod
 
 
@@ -186,6 +186,52 @@ Footer {
 
 #api-panel.-focused-pane {
     border: solid #a8d8ea;
+}
+
+#insights-panel {
+    display: none;
+    height: 1fr;
+    border-top: solid #1e3a5f;
+}
+
+#insights-panel.-focused-pane {
+    border: solid #a8d8ea;
+}
+
+#insights-left {
+    width: 42;
+    border-right: solid #1e3a5f;
+    background: #0d1b2a;
+}
+
+#insights-toggle-bar {
+    height: 3;
+    background: #0d1b2a;
+    padding: 0 1;
+}
+
+#insights-search {
+    height: 3;
+    background: #0d1b2a;
+    color: #e2e8f0;
+    border: solid #1e3a5f;
+    padding: 0 1;
+}
+
+#insights-search:focus {
+    border: solid #a8d8ea;
+}
+
+#insights-list-scroll {
+    width: 1fr;
+    background: #0d1b2a;
+    padding: 0 1;
+}
+
+#insights-detail-scroll {
+    width: 1fr;
+    background: #1a1a2e;
+    padding: 0 2;
 }
 
 #api-left {
@@ -565,6 +611,7 @@ class RepoLensApp(App):
         Binding("3", "tab_graph", "Full Graph"),
         Binding("4", "tab_funcs", "Functions"),
         Binding("5", "tab_api", "API"),
+        Binding("6", "tab_insights", "Insights"),
         Binding("a", "ask_ai", "Ask AI"),
         Binding("o", "onboard", "Codebase Guide"),
         Binding("f", "focus_next_pane", "Focus pane"),
@@ -587,6 +634,10 @@ class RepoLensApp(App):
     _api_view: str = "endpoints"   # "endpoints" | "dtos"
     _api_selected: int = 0
     _api_search: str = ""
+    _insights_view: str = "dead"   # "dead" | "env"
+    _insights_selected: int = 0
+    _insights_search: str = ""
+    _selected_dir: Optional[str] = None   # directory prefix when a folder is highlighted
 
     def __init__(self, analysis: RepoAnalysis) -> None:
         super().__init__()
@@ -605,6 +656,7 @@ class RepoLensApp(App):
                     yield Button("3 Full Graph",   classes="tab-btn",         id="tab-graph-btn")
                     yield Button("4 Functions",    classes="tab-btn",         id="tab-funcs-btn")
                     yield Button("5 API",          classes="tab-btn",         id="tab-api-btn")
+                    yield Button("6 Insights",     classes="tab-btn",         id="tab-insights-btn")
                 yield ScrollableContainer(
                     Static("", id="content"),
                     id="content-area",
@@ -626,6 +678,16 @@ class RepoLensApp(App):
                             yield Static("", id="api-list")
                     with ScrollableContainer(id="api-detail-scroll"):
                         yield Static("", id="api-detail")
+                with Horizontal(id="insights-panel"):
+                    with Vertical(id="insights-left"):
+                        with Horizontal(id="insights-toggle-bar"):
+                            yield Button("Dead Code", classes="api-toggle -active-toggle", id="btn-dead")
+                            yield Button("Env Vars",  classes="api-toggle",               id="btn-env")
+                        yield Input(placeholder="  search…", id="insights-search")
+                        with ScrollableContainer(id="insights-list-scroll"):
+                            yield Static("", id="insights-list")
+                    with ScrollableContainer(id="insights-detail-scroll"):
+                        yield Static("", id="insights-detail")
                 yield Static("", id="stats-bar")
         yield Footer()
 
@@ -672,6 +734,7 @@ class RepoLensApp(App):
             else:
                 parent = get_dir_node(parts[:-1])
                 node = parent.add(f" {parts[-1]}/", expand=True)
+            node.data = key + "/"   # trailing slash marks this as a directory
             dir_nodes[key] = node
             return node
 
@@ -718,16 +781,20 @@ class RepoLensApp(App):
         n_funcs  = len(stats.functions)
         n_ep     = len(self._analysis.endpoints)
         n_dtos   = len(self._analysis.dtos)
+        n_dead   = len(self._analysis.dead_items)
+        n_env    = len(self._analysis.env_vars)
         n_cycles = len(stats.circular_deps)
         cycle_str = (
             f"  [red]! {n_cycles} circular dep{'s' if n_cycles != 1 else ''}[/]"
             if n_cycles else "  [green]no circular deps[/]"
         )
-        ep_str = f"   [bold]{n_ep}[/] endpoints  [bold]{n_dtos}[/] DTOs" if (n_ep or n_dtos) else ""
+        ep_str   = f"   [bold]{n_ep}[/] endpoints  [bold]{n_dtos}[/] DTOs" if (n_ep or n_dtos) else ""
+        ins_str  = f"   [bold]{n_dead}[/] dead  [bold]{n_env}[/] env refs" if (n_dead or n_env) else ""
         text = (
             f"  [bold]{n_files}[/] files"
             f"   [bold]{n_funcs}[/] functions"
             f"{ep_str}"
+            f"{ins_str}"
             f"{cycle_str}"
             f"   [dim][ / ] resize   [f] switch pane[/]"
         )
@@ -737,19 +804,31 @@ class RepoLensApp(App):
 
     def _set_active_tab(self, tab: str) -> None:
         self.current_tab = tab
-        for btn_id in ("tab-deps-btn", "tab-calls-btn", "tab-graph-btn", "tab-funcs-btn", "tab-api-btn"):
+        for btn_id in ("tab-deps-btn", "tab-calls-btn", "tab-graph-btn", "tab-funcs-btn", "tab-api-btn", "tab-insights-btn"):
             self.query_one(f"#{btn_id}", Button).remove_class("-active")
         self.query_one(f"#tab-{tab}-btn", Button).add_class("-active")
         self._render_content()
-        # Tabs 4 & 5 have their own navigation — auto-focus their content pane
-        # so arrow keys go to the list, not the file tree.
-        if tab in ("funcs", "api"):
+        # Always sync the white-box focus border with the current pane state.
+        if tab in ("funcs", "api", "insights"):
             self._focus_on_content = True
             self.query_one("#sidebar").remove_class("-focused-pane")
             self.query_one("#file-tree", Tree).remove_class("-focused-pane")
             self.query_one("#fn-panel").set_class(tab == "funcs", "-focused-pane")
             self.query_one("#api-panel").set_class(tab == "api", "-focused-pane")
+            self.query_one("#insights-panel").set_class(tab == "insights", "-focused-pane")
             self.query_one("#content-area").remove_class("-focused-pane")
+        else:
+            self.query_one("#fn-panel").remove_class("-focused-pane")
+            self.query_one("#api-panel").remove_class("-focused-pane")
+            self.query_one("#insights-panel").remove_class("-focused-pane")
+            if self._focus_on_content:
+                self.query_one("#content-area").add_class("-focused-pane")
+                self.query_one("#sidebar").remove_class("-focused-pane")
+                self.query_one("#file-tree", Tree).remove_class("-focused-pane")
+            else:
+                self.query_one("#content-area").remove_class("-focused-pane")
+                self.query_one("#sidebar").add_class("-focused-pane")
+                self.query_one("#file-tree", Tree).add_class("-focused-pane")
 
     @on(Button.Pressed, "#tab-deps-btn")
     def _tab_deps(self) -> None:
@@ -798,6 +877,36 @@ class RepoLensApp(App):
         self._reset_fn_panel()
         self._set_active_tab("funcs")
 
+    @on(Button.Pressed, "#tab-insights-btn")
+    def _tab_insights_btn(self) -> None:
+        self._set_active_tab("insights")
+
+    @on(Button.Pressed, "#btn-dead")
+    def _insights_show_dead(self) -> None:
+        self._insights_view = "dead"
+        self._insights_selected = 0
+        self._insights_search = ""
+        try:
+            self.query_one("#insights-search", Input).value = ""
+        except Exception:
+            pass
+        self._update_insights_toggle()
+        self._render_insights_list()
+        self._render_insights_detail()
+
+    @on(Button.Pressed, "#btn-env")
+    def _insights_show_env(self) -> None:
+        self._insights_view = "env"
+        self._insights_selected = 0
+        self._insights_search = ""
+        try:
+            self.query_one("#insights-search", Input).value = ""
+        except Exception:
+            pass
+        self._update_insights_toggle()
+        self._render_insights_list()
+        self._render_insights_detail()
+
     def action_tab_deps(self) -> None:
         self._set_active_tab("deps")
 
@@ -813,6 +922,9 @@ class RepoLensApp(App):
 
     def action_tab_api(self) -> None:
         self._set_active_tab("api")
+
+    def action_tab_insights(self) -> None:
+        self._set_active_tab("insights")
 
     def action_goto_funcs(self) -> None:
         self._reset_fn_panel()
@@ -830,10 +942,16 @@ class RepoLensApp(App):
 
     @on(Tree.NodeHighlighted, "#file-tree")
     def _on_file_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        # data is set on file leaves; directory nodes have no data → show overview
-        self.selected_file = event.node.data or None
+        data = event.node.data
+        if data and isinstance(data, str) and data.endswith("/"):
+            self.selected_file = None
+            self._selected_dir = data
+        else:
+            self.selected_file = data or None
+            self._selected_dir = None
         self._fn_selected = 0
         self._api_selected = 0
+        self._insights_selected = 0
         self._render_content()
 
     @on(Input.Changed, "#fn-search")
@@ -858,22 +976,37 @@ class RepoLensApp(App):
     def _on_api_search_submitted(self, event: Input.Submitted) -> None:
         self.query_one("#api-list-scroll").focus()
 
+    @on(Input.Changed, "#insights-search")
+    def _on_insights_search_changed(self, event: Input.Changed) -> None:
+        self._insights_search = event.value
+        self._insights_selected = 0
+        self._render_insights_list()
+        self._render_insights_detail()
+
+    @on(Input.Submitted, "#insights-search")
+    def _on_insights_search_submitted(self, event: Input.Submitted) -> None:
+        self.query_one("#insights-list-scroll").focus()
+
     # ── Content rendering ─────────────────────────────────────────────────────
 
     def _render_content(self) -> None:
-        is_funcs = self.current_tab == "funcs"
-        is_api   = self.current_tab == "api"
-        content_area = self.query_one("#content-area")
-        fn_panel  = self.query_one("#fn-panel")
-        api_panel = self.query_one("#api-panel")
+        is_funcs    = self.current_tab == "funcs"
+        is_api      = self.current_tab == "api"
+        is_insights = self.current_tab == "insights"
+        content_area    = self.query_one("#content-area")
+        fn_panel        = self.query_one("#fn-panel")
+        api_panel       = self.query_one("#api-panel")
+        insights_panel  = self.query_one("#insights-panel")
 
-        content_area.display = not is_funcs and not is_api
-        fn_panel.display  = is_funcs
-        api_panel.display = is_api
+        content_area.display   = not is_funcs and not is_api and not is_insights
+        fn_panel.display       = is_funcs
+        api_panel.display      = is_api
+        insights_panel.display = is_insights
 
         focused = content_area.has_class("-focused-pane")
         fn_panel.set_class(is_funcs and focused, "-focused-pane")
         api_panel.set_class(is_api and focused, "-focused-pane")
+        insights_panel.set_class(is_insights and focused, "-focused-pane")
 
         if is_funcs:
             self._render_fn_list()
@@ -882,6 +1015,10 @@ class RepoLensApp(App):
         if is_api:
             self._render_api_list()
             self._render_api_detail()
+            return
+        if is_insights:
+            self._render_insights_list()
+            self._render_insights_detail()
             return
         content = self.query_one("#content", Static)
         if self.selected_file and self.selected_file.endswith(".md"):
@@ -901,6 +1038,8 @@ class RepoLensApp(App):
         )
         if self.selected_file:
             fns = [(k, v) for k, v in fns if v.file_path == self.selected_file]
+        elif self._selected_dir:
+            fns = [(k, v) for k, v in fns if v.file_path.startswith(self._selected_dir)]
         if search:
             q = search.lower()
             fns = [(k, v) for k, v in fns if q in v.name.lower()]
@@ -1307,6 +1446,7 @@ class RepoLensApp(App):
             self.query_one("#file-tree", Tree).remove_class("-focused-pane")
             self.query_one("#fn-panel").set_class(self.current_tab == "funcs", "-focused-pane")
             self.query_one("#api-panel").set_class(self.current_tab == "api", "-focused-pane")
+            self.query_one("#insights-panel").set_class(self.current_tab == "insights", "-focused-pane")
         else:
             self.query_one("#file-tree", Tree).focus()
             self.query_one("#sidebar").add_class("-focused-pane")
@@ -1314,6 +1454,7 @@ class RepoLensApp(App):
             self.query_one("#content-area", ScrollableContainer).remove_class("-focused-pane")
             self.query_one("#fn-panel").remove_class("-focused-pane")
             self.query_one("#api-panel").remove_class("-focused-pane")
+            self.query_one("#insights-panel").remove_class("-focused-pane")
 
     # ── Key handling ──────────────────────────────────────────────────────────
 
@@ -1336,6 +1477,24 @@ class RepoLensApp(App):
                     self._render_api_list()
                     self._render_api_detail()
                     event.stop()
+        # Left/right toggle Dead Code↔Env Vars in Tab 6
+        elif self.current_tab == "insights":
+            focused_id = getattr(self.focused, "id", None)
+            if focused_id != "insights-search":
+                if event.key == "right":
+                    self._insights_view = "env"
+                    self._insights_selected = 0
+                    self._update_insights_toggle()
+                    self._render_insights_list()
+                    self._render_insights_detail()
+                    event.stop()
+                elif event.key == "left":
+                    self._insights_view = "dead"
+                    self._insights_selected = 0
+                    self._update_insights_toggle()
+                    self._render_insights_list()
+                    self._render_insights_detail()
+                    event.stop()
 
     def action_navigate_down(self) -> None:
         if not self._focus_on_content:
@@ -1354,6 +1513,12 @@ class RepoLensApp(App):
                 self._api_selected += 1
                 self._render_api_list()
                 self._render_api_detail()
+        elif self.current_tab == "insights" and focused_id != "insights-search":
+            items = self._get_insights_items(self._insights_search)
+            if self._insights_selected < len(items) - 1:
+                self._insights_selected += 1
+                self._render_insights_list()
+                self._render_insights_detail()
         else:
             self.query_one("#content-area", ScrollableContainer).scroll_down()
 
@@ -1372,6 +1537,11 @@ class RepoLensApp(App):
                 self._api_selected -= 1
                 self._render_api_list()
                 self._render_api_detail()
+        elif self.current_tab == "insights" and focused_id != "insights-search":
+            if self._insights_selected > 0:
+                self._insights_selected -= 1
+                self._render_insights_list()
+                self._render_insights_detail()
         else:
             self.query_one("#content-area", ScrollableContainer).scroll_up()
 
@@ -1433,6 +1603,8 @@ class RepoLensApp(App):
             items: list = list(self._analysis.endpoints)
             if self.selected_file:
                 items = [e for e in items if e.file_path == self.selected_file]
+            elif self._selected_dir:
+                items = [e for e in items if e.file_path.startswith(self._selected_dir)]
             items = sorted(items, key=lambda e: (e.path, e.method))
             if search:
                 q = search.lower()
@@ -1441,6 +1613,8 @@ class RepoLensApp(App):
             items = list(self._analysis.dtos)
             if self.selected_file:
                 items = [d for d in items if d.file_path == self.selected_file]
+            elif self._selected_dir:
+                items = [d for d in items if d.file_path.startswith(self._selected_dir)]
             items = sorted(items, key=lambda d: d.name.lower())
             if search:
                 q = search.lower()
@@ -1583,6 +1757,163 @@ class RepoLensApp(App):
 
         self.query_one("#api-detail", Static).update(t)
         self.query_one("#api-detail-scroll", ScrollableContainer).scroll_home(animate=False)
+
+    # ── Insights Tab (Tab 6) ──────────────────────────────────────────────────
+
+    def _update_insights_toggle(self) -> None:
+        self.query_one("#btn-dead", Button).set_class(self._insights_view == "dead", "-active-toggle")
+        self.query_one("#btn-env",  Button).set_class(self._insights_view == "env",  "-active-toggle")
+
+    def _get_insights_items(self, search: str = "") -> list:
+        if self._insights_view == "dead":
+            items: list = list(self._analysis.dead_items)
+            if self.selected_file:
+                items = [d for d in items if d.file_path == self.selected_file]
+            elif self._selected_dir:
+                items = [d for d in items if d.file_path.startswith(self._selected_dir)]
+            if search:
+                q = search.lower()
+                items = [d for d in items if q in d.name.lower() or q in d.kind.lower() or q in d.file_path.lower()]
+        else:
+            items = list(self._analysis.env_vars)
+            if self.selected_file:
+                items = [e for e in items if e.file_path == self.selected_file]
+            elif self._selected_dir:
+                items = [e for e in items if e.file_path.startswith(self._selected_dir)]
+            if search:
+                q = search.lower()
+                items = [e for e in items if q in e.name.lower() or q in e.file_path.lower()]
+        return items
+
+    def _render_insights_list(self) -> None:
+        items = self._get_insights_items(self._insights_search)
+        t = Text()
+        label = "dead code items" if self._insights_view == "dead" else "env vars"
+
+        if self.selected_file:
+            short = self.selected_file.split("/")[-1]
+            t.append(f" {len(items)} {label}", style="bold #a8d8ea")
+            t.append(f" · {short}\n", style="#4a5568")
+        else:
+            t.append(f" {len(items)} {label}\n", style="bold #a8d8ea")
+        t.append(" " + "─" * 38 + "\n", style="#1e3a5f")
+        t.append("  ← → switch view\n", style="#2d4a6b")
+
+        for i, item in enumerate(items):
+            sel = i == self._insights_selected
+            if self._insights_view == "dead":
+                kind_icon = "" if item.kind == "function" else ""
+                name = item.name if len(item.name) <= 28 else item.name[:25] + "…"
+                if sel:
+                    t.append(f"▶ {kind_icon} {name}\n", style="bold #fc8181 on #1e3a5f")
+                else:
+                    t.append(f"  {kind_icon} {name}\n", style="#e2e8f0")
+            else:
+                name = item.name if len(item.name) <= 28 else item.name[:25] + "…"
+                dot_color = "#68d391" if item.in_dotenv else "#fc8181"
+                dot = "●"
+                if sel:
+                    t.append(f"▶ ", style="bold #a8d8ea on #1e3a5f")
+                    t.append(dot, style=f"bold {dot_color} on #1e3a5f")
+                    t.append(f" {name}\n", style="bold #a8d8ea on #1e3a5f")
+                else:
+                    t.append(f"  ", style="#e2e8f0")
+                    t.append(dot, style=dot_color)
+                    t.append(f" {name}\n", style="#e2e8f0")
+
+        if not items:
+            if self._insights_view == "dead":
+                t.append("\n  No dead code detected!\n", style="#68d391")
+            else:
+                t.append("\n  No env vars found.\n", style="#4a5568")
+
+        self.query_one("#insights-list", Static).update(t)
+        self.query_one("#insights-list-scroll", ScrollableContainer).scroll_to(
+            y=max(0, self._insights_selected - 3), animate=False
+        )
+
+    def _render_insights_detail(self) -> None:
+        items = self._get_insights_items(self._insights_search)
+        t = Text()
+
+        if not items:
+            if self._insights_view == "dead":
+                t.append("\n  Dead Code Detector\n\n", style="bold #a8d8ea")
+                if self.selected_file:
+                    t.append(f"  No dead code in {self.selected_file.split('/')[-1]}.\n", style="#68d391")
+                else:
+                    t.append("  No dead code detected across the repo.\n", style="#68d391")
+            else:
+                t.append("\n  Env Var Tracker\n\n", style="bold #a8d8ea")
+                if self.selected_file:
+                    t.append(f"  No env vars in {self.selected_file.split('/')[-1]}.\n", style="#4a5568")
+                else:
+                    t.append("  No env vars found across the repo.\n", style="#4a5568")
+            self.query_one("#insights-detail", Static).update(t)
+            return
+
+        idx = min(self._insights_selected, len(items) - 1)
+        item = items[idx]
+
+        if self._insights_view == "dead":
+            kind_label = "Function" if item.kind == "function" else "File"
+            t.append(f"\n  {item.name}\n", style="bold #fc8181")
+            t.append(f"  {kind_label}  ·  {item.reason}\n", style="#a0aec0")
+            t.append(f"  {item.file_path}", style="#4a5568")
+            t.append(f"  ·  line {item.line}\n", style="#4a5568")
+
+            if item.kind == "function":
+                # Show source snippet
+                file_node = next((f for f in self._analysis.files if f.path == item.file_path), None)
+                if file_node and file_node.content:
+                    t.append(f"\n  {'─' * 58}\n", style="#2d3748")
+                    t.append("  SOURCE\n\n", style="bold #a8d8ea")
+                    lines = file_node.content.splitlines()
+                    start = max(0, item.line - 1)
+                    for ln in lines[start : start + 20]:
+                        t.append(f"  {ln}\n", style="#e2e8f0")
+            else:
+                t.append(f"\n  {'─' * 58}\n", style="#2d3748")
+                t.append("  WHY THIS MATTERS\n\n", style="bold #a8d8ea")
+                t.append("  This file is never imported. It may be:\n", style="#718096")
+                for line in [
+                    "  • An unused utility or helper",
+                    "  • An entry point not in the known list",
+                    "  • A leftover from a refactor",
+                ]:
+                    t.append(f"{line}\n", style="#4a5568")
+        else:
+            dot_color = "#68d391" if item.in_dotenv else "#fc8181"
+            status = "defined in .env" if item.in_dotenv else "NOT in .env"
+            t.append(f"\n  ", style="#e2e8f0")
+            t.append("●", style=f"bold {dot_color}")
+            t.append(f"  {item.name}\n", style="bold #e2e8f0")
+            t.append(f"  status:    ", style="#4a5568")
+            t.append(f"{status}\n", style=dot_color)
+            t.append(f"  file:      ", style="#4a5568")
+            t.append(f"{item.file_path}", style="#90cdf4")
+            t.append(f"  ·  line {item.line}\n", style="#4a5568")
+
+            if item.has_default:
+                t.append(f"  default:   ", style="#4a5568")
+                t.append(f'"{item.default_value}"\n', style="#68d391")
+            else:
+                t.append(f"  default:   ", style="#4a5568")
+                t.append("none (required)\n", style="#fc8181")
+
+            # Show source context
+            file_node = next((f for f in self._analysis.files if f.path == item.file_path), None)
+            if file_node and file_node.content:
+                t.append(f"\n  {'─' * 58}\n", style="#2d3748")
+                t.append("  USAGE\n\n", style="bold #a8d8ea")
+                lines = file_node.content.splitlines()
+                ln_idx = max(0, item.line - 1)
+                start = max(0, ln_idx - 1)
+                for ln in lines[start : ln_idx + 3]:
+                    t.append(f"  {ln}\n", style="#e2e8f0")
+
+        self.query_one("#insights-detail", Static).update(t)
+        self.query_one("#insights-detail-scroll", ScrollableContainer).scroll_home(animate=False)
 
     def action_refresh_view(self) -> None:
         self._render_content()

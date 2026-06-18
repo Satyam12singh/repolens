@@ -70,6 +70,25 @@ class ApiEndpoint:
 
 
 @dataclass
+class DeadItem:
+    name: str
+    kind: str        # "function" | "file"
+    file_path: str
+    line: int
+    reason: str      # "no callers found" | "never imported"
+
+
+@dataclass
+class EnvVar:
+    name: str
+    file_path: str
+    line: int
+    has_default: bool
+    default_value: str   # "" if none
+    in_dotenv: bool      # found in a .env file in the scanned repo
+
+
+@dataclass
 class RepoAnalysis:
     root: str
     files: list[FileNode] = field(default_factory=list)
@@ -77,3 +96,5 @@ class RepoAnalysis:
     stats: GraphStats = field(default_factory=GraphStats)
     endpoints: list[ApiEndpoint] = field(default_factory=list)
     dtos: list[DtoModel] = field(default_factory=list)
+    dead_items: list[DeadItem] = field(default_factory=list)
+    env_vars: list[EnvVar] = field(default_factory=list)

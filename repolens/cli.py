@@ -67,6 +67,16 @@ def main() -> None:
     from repolens.api_scanner import scan_all as api_scan_all
     endpoints, dtos = api_scan_all(files)
 
+    print("  Detecting dead code and scanning env vars…")
+    from repolens.dead_code import find_dead_code
+    from repolens.env_scanner import scan_env_vars
+    # dead_code needs the full analysis object, build a temporary one first
+    from repolens.models import RepoAnalysis as _RA
+    _tmp = _RA(root=str(root), files=files, file_analyses=file_analyses,
+               stats=stats, endpoints=endpoints, dtos=dtos)
+    dead_items = find_dead_code(_tmp)
+    env_vars = scan_env_vars(files, root=str(root))
+
     analysis = RepoAnalysis(
         root=str(root),
         files=files,
@@ -74,10 +84,12 @@ def main() -> None:
         stats=stats,
         endpoints=endpoints,
         dtos=dtos,
+        dead_items=dead_items,
+        env_vars=env_vars,
     )
 
     n_cycles = len(stats.circular_deps)
-    print(f"  Done. {len(stats.functions)} functions  ·  {len(endpoints)} endpoints  ·  {len(dtos)} DTOs  ·  {n_cycles} circular dep(s)")
+    print(f"  Done. {len(stats.functions)} functions  ·  {len(endpoints)} endpoints  ·  {len(dtos)} DTOs  ·  {len(dead_items)} dead  ·  {len(env_vars)} env refs  ·  {n_cycles} circular dep(s)")
 
     if args.json:
         _print_json(analysis)
