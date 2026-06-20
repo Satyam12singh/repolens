@@ -97,8 +97,6 @@ jobs:
         include:
           - os: macos-latest
             name: repolens-macos-arm64
-          - os: macos-13
-            name: repolens-macos-x64
           - os: ubuntu-latest
             name: repolens-linux-x64
           - os: windows-latest
